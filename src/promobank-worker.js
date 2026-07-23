@@ -56,17 +56,28 @@ export class PromobankWorker {
   }
 
   async start() {
-    if (this.#context) {
-      return;
-    }
+    if (this.#context) return;
 
     await fs.mkdir(this.#config.profileDirectory, { recursive: true });
+
     const launchOptions = {
       headless: this.#config.headless,
       acceptDownloads: false,
       locale: "pt-BR",
-      viewport: null,
-      args: ["--disable-save-password-bubble"],
+      viewport: { width: 1920, height: 1080 },
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-save-password-bubble",
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-accelerated-2d-canvas",
+        "--disable-gpu",
+        "--disable-features=IsolateOrigins,site-per-process,AutomationControlled",
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "--window-size=1920,1080",
+        "--disable-web-security",
+      ],
     };
 
     if (this.#config.chromeExecutable) {
@@ -75,21 +86,41 @@ export class PromobankWorker {
       launchOptions.channel = this.#config.chromeChannel;
     }
 
-    this.#logger.info("Iniciando perfil persistente do Chrome para o Promobank.", {
+    this.#logger.info("🚀 Iniciando Chrome Ultra Stealth...", {
       profile: "dedicado-e-persistente",
       headless: this.#config.headless,
     });
 
     try {
       this.#context = await chromium.launchPersistentContext(this.#config.profileDirectory, launchOptions);
-      this.#context.setDefaultTimeout(30_000);
+      this.#context.setDefaultTimeout(45_000);
       this.#page = this.#context.pages()[0] || (await this.#context.newPage());
-      this.#page.setDefaultNavigationTimeout(this.#config.loginTimeoutMs);
+      this.#page.setDefaultNavigationTimeout(60_000);
+
+      await this.#page.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
+        Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+        Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+        const getParameter = WebGLRenderingContext.prototype.getParameter;
+        WebGLRenderingContext.prototype.getParameter = function (parameter) {
+          if (parameter === 37445) return 'Intel Inc.';
+          if (parameter === 37446) return 'Intel(R) UHD Graphics 620';
+          return getParameter.apply(this, arguments);
+        };
+
+        delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+        delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+        delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+      });
+
     } catch (error) {
       throw new OperatorInterventionError(
         "CHROME_START_FAILED",
-        "Nao foi possivel iniciar o Chrome dedicado. Verifique se o perfil do robo ja esta aberto.",
-        { cause: error },
+        "Não foi possível iniciar o Chrome.",
+        { cause: error }
       );
     }
   }
@@ -174,15 +205,29 @@ export class PromobankWorker {
       timeout: this.#config.loginTimeoutMs,
     });
 
+    await this.#page.waitForTimeout(4000);
+
     if (await this.#isAppReady()) {
       await this.#throwIfRemoteSessionConflict();
       return;
     }
 
+    try {
+      await this.#page.waitForSelector('iframe.iFrameStyle', { timeout: 15000 });
+    } catch (e) {
+      this.#logger.warn("Iframe não detectado, recarregando...");
+      await this.#page.reload({ waitUntil: "domcontentloaded" });
+      await this.#page.waitForTimeout(5000);
+    }
+
     const companyInput = this.#page.locator(SELECTORS.loginCompany);
     try {
-      await companyInput.waitFor({ state: "visible", timeout: this.#config.loginTimeoutMs });
+      await companyInput.waitFor({ state: "visible", timeout: 12000 });
     } catch (error) {
+      if (await this.#isAppReady()) {
+        await this.#throwIfRemoteSessionConflict();
+        return;
+      }
       throw new OperatorInterventionError(
         "LOGIN_PAGE_UNAVAILABLE",
         "A pagina de login do Promobank nao ficou disponivel.",
@@ -207,6 +252,7 @@ export class PromobankWorker {
       .waitFor({ state: "attached", timeout: this.#config.loginTimeoutMs })
       .then(() => "ready")
       .catch(() => "timeout");
+
     const conflictPromise = this.#page
       .locator(SELECTORS.remoteSessionConflict)
       .waitFor({ state: "visible", timeout: this.#config.loginTimeoutMs })
@@ -232,7 +278,6 @@ export class PromobankWorker {
     if (!this.#page || this.#page.isClosed()) {
       return false;
     }
-
     return (await this.#page.locator(SELECTORS.meuInssMenuItem).count()) > 0;
   }
 
@@ -247,35 +292,42 @@ export class PromobankWorker {
   }
 
   async #openMeuInss() {
+    this.#logger.info("Tentando abrir menu Meu INSS...");
+
     const menuItem = this.#page.locator(SELECTORS.meuInssMenuItem);
     if ((await menuItem.count()) !== 1) {
-      throw new PromobankAutomationError(
-        "MEU_INSS_MENU_NOT_FOUND",
-        "O menu Meu INSS nao foi encontrado de forma unica.",
-      );
+      this.#logger.warn("Menu Meu INSS não encontrado. Tentando recarregar...");
+      await this.#page.reload({ waitUntil: "domcontentloaded" });
+      await this.#page.waitForTimeout(5000);
     }
 
     if (!(await menuItem.isVisible())) {
+      this.#logger.info("Menu não visível, clicando em Serviços...");
       const servicesMenu = this.#page.locator(SELECTORS.servicesMenu, { hasText: "Serviços" });
-      if ((await servicesMenu.count()) === 0) {
-        throw new PromobankAutomationError("SERVICES_MENU_NOT_FOUND", "O menu Servicos nao foi encontrado.");
+      if ((await servicesMenu.count()) > 0) {
+        await servicesMenu.first().click();
+        await this.#page.waitForTimeout(2000);
       }
-      await servicesMenu.first().click();
     }
 
     const frameNavigation = this.#page
       .waitForEvent("framenavigated", {
         predicate: (frame) => frame.parentFrame() === this.#page.mainFrame(),
-        timeout: 15_000,
+        timeout: 25_000,
       })
       .catch(() => undefined);
+
     await menuItem.click();
     await frameNavigation;
 
+    await this.#page.waitForTimeout(3000);
+
     const frame = this.#page.frameLocator(SELECTORS.appFrame);
     try {
-      await frame.locator(SELECTORS.cpfInput).waitFor({ state: "visible", timeout: this.#config.loginTimeoutMs });
+      await frame.locator(SELECTORS.cpfInput).waitFor({ state: "visible", timeout: 15000 });
+      this.#logger.info("✅ Frame Meu INSS carregado com sucesso!");
     } catch (error) {
+      this.#logger.error("❌ Frame Meu INSS não carregou");
       throw new PromobankAutomationError(
         "MEU_INSS_FRAME_NOT_READY",
         "A tela Meu INSS nao ficou pronta para receber o CPF.",
