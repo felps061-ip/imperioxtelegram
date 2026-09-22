@@ -6,10 +6,10 @@ import { getLocalApplicationDirectory, resolveEnvironmentFile } from "../src/loc
 test("mantem segredos e perfil fora do OneDrive no Windows", () => {
   const env = { LOCALAPPDATA: "C:\\Users\\teste\\AppData\\Local" };
   const directory = getLocalApplicationDirectory({ env, platform: "win32" });
-  assert.equal(directory, path.join(env.LOCALAPPDATA, "PromobankTelegramBot"));
+  assert.equal(directory, path.join(env.LOCALAPPDATA, "PromobankWhatsAppBot"));
   assert.equal(
     resolveEnvironmentFile({ env, platform: "win32" }),
-    path.join(env.LOCALAPPDATA, "PromobankTelegramBot", ".env"),
+    path.join(env.LOCALAPPDATA, "PromobankWhatsAppBot", ".env"),
   );
 });
 

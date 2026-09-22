@@ -37,7 +37,7 @@ export class InMemoryJobQueue {
     this.#retention = retention;
   }
 
-  enqueue({ requesterId, chatId, cpf }) {
+  enqueue({ requesterId, chatId, cpf, sourceMessage }) {
     if (this.#stopped) {
       throw new Error("A fila esta encerrada.");
     }
@@ -62,6 +62,7 @@ export class InMemoryJobQueue {
       requesterId: requesterKey,
       chatId: String(chatId),
       cpf,
+      sourceMessage,
       cpfMasked: maskCpf(cpf),
       deduplicationKey,
       status: "queued",
@@ -163,6 +164,7 @@ export class InMemoryJobQueue {
         } finally {
           job.finishedAt = new Date().toISOString();
           job.cpf = undefined;
+          job.sourceMessage = undefined;
           this.#deduplication.delete(job.deduplicationKey);
           job.deduplicationKey = undefined;
           this.#runningJob = undefined;

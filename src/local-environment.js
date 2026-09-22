@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const APPLICATION_DIRECTORY_NAME = "PromobankTelegramBot";
+const APPLICATION_DIRECTORY_NAME = "PromobankWhatsAppBot";
 
 export function getLocalApplicationDirectory({ env = process.env, platform = process.platform } = {}) {
   if (platform === "win32") {

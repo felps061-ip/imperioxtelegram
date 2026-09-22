@@ -1,217 +1,138 @@
-import { setTimeout as delay } from "node:timers/promises";
-import { isValidCpf, maskCpf, normalizeCpf } from "./cpf.js";
-import { parseIncomingText } from "./commands.js";
+import { isValidCpf, looksLikeCpf, maskCpf, normalizeCpf } from "./cpf.js";
+import fs from "node:fs/promises";
 import { loadConfig } from "./config.js";
 import { QueueFullError } from "./errors.js";
 import { InMemoryJobQueue } from "./job-queue.js";
 import { loadLocalEnvironment } from "./local-environment.js";
 import { createLogger } from "./logger.js";
 import { PromobankWorker } from "./promobank-worker.js";
-import { TelegramClient } from "./telegram-client.js";
-
-const STATUS_LABELS = Object.freeze({
-  queued: "aguardando na fila",
-  processing: "em processamento",
-  completed: "concluido",
-  failed: "falhou",
-});
-
-function helpText(userId, authorized) {
-  if (!authorized) {
-    return [
-      "Este bot e restrito a vendedores autorizados.",
-      `Seu ID do Telegram e <code>${userId}</code>.`,
-      "Envie esse ID ao administrador para solicitar acesso.",
-    ].join("\n");
-  }
-
-  return [
-    "<b>Extrato INSS</b>",
-    "Envie somente o CPF, com ou sem pontuacao, ou use:",
-    "<code>/inss 123.456.789-00</code>",
-    "",
-    "Para consultar um protocolo:",
-    "<code>/status PROTOCOLO</code>",
-    "",
-    "Por seguranca, use somente esta conversa privada.",
-  ].join("\n");
-}
+import { WhatsAppClient } from "./whatsapp-client.js";
 
 function publicFailureMessage(code) {
-  switch (code) {
-    case "REMOTE_SESSION_CONFLICT":
-      return "O login do Promobank esta ativo em outro computador. Um operador precisa verificar a sessao.";
-    case "LOGIN_REQUIRED":
-    case "LOGIN_FAILED":
-    case "LOGIN_PAGE_UNAVAILABLE":
-      return "A sessao do Promobank precisa de intervencao do operador.";
-    case "QUERY_TIMEOUT":
-      return "O Promobank nao disponibilizou a impressao dentro do prazo. Tente novamente mais tarde.";
-    case "INVALID_PDF":
-    case "PDF_HTTP_ERROR":
-    case "PDF_DOWNLOAD_FAILED":
-    case "PDF_POPUP_FAILED":
-      return "O Promobank respondeu, mas nao foi possivel obter um PDF valido.";
-    default:
-      return "Nao foi possivel concluir a consulta. O erro foi registrado para verificacao.";
+  if (["LOGIN_REQUIRED", "LOGIN_FAILED", "LOGIN_PAGE_UNAVAILABLE"].includes(code)) {
+    return "A sessao do Promobank precisa do login manual da TI no Chrome dedicado.";
   }
+  if (code === "QUERY_TIMEOUT") return "O Promobank nao disponibilizou a impressao no prazo.";
+  return "Nao foi possivel concluir a consulta. A TI verificara o erro.";
 }
 
 async function run() {
   loadLocalEnvironment();
   const config = loadConfig();
   const logger = createLogger({ level: config.logLevel });
-  const abortController = new AbortController();
-  const telegram = new TelegramClient({
-    token: config.telegram.token,
-    logger,
-    pollTimeoutSeconds: config.telegram.pollTimeoutSeconds,
-  });
   const worker = new PromobankWorker({ config: config.promobank, logger });
+  const whatsapp = new WhatsAppClient({ config: config.whatsapp, logger });
 
   const queue = new InMemoryJobQueue({
     logger,
     maxPending: config.queue.maxPending,
     handler: async (job) => {
-      await telegram.sendMessage(
-        job.chatId,
-        `Protocolo <code>${job.protocol}</code>: iniciando consulta de ${job.cpfMasked}.`,
+      const protocolMessage = await whatsapp.sendPrivateText(
+        job.sourceMessage,
+        `Protocolo ${job.protocol}: iniciando a consulta de ${job.cpfMasked}.`,
       );
 
       try {
-        const pdf = await worker.fetchInssPdf(job.cpf, job.protocol);
-        await telegram.sendDocument(job.chatId, pdf, {
-          filename: `extrato-inss-${job.protocol}.pdf`,
-          caption: `Extrato INSS — protocolo <code>${job.protocol}</code> — ${job.cpfMasked}`,
-          protectContent: config.telegram.protectContent,
+        const pdf = await worker.fetchInssPdf(job.cpf, job.protocol, config.promobank.downloadDirectory);
+        const savedPdf = await fs.stat(pdf.filePath);
+        if (!savedPdf.isFile() || savedPdf.size !== pdf.bytes.byteLength) {
+          throw new Error("O PDF salvo nao corresponde ao arquivo preparado para envio.");
+        }
+        logger.info("PDF confirmado no disco antes do envio.", {
+          protocol: job.protocol,
+          bytes: savedPdf.size,
+          filePath: pdf.filePath,
         });
-      } catch (error) {
-        await telegram
-          .sendMessage(
-            job.chatId,
-            `Protocolo <code>${job.protocol}</code>: ${publicFailureMessage(error?.code)}`,
-          )
-          .catch((notificationError) => {
-            logger.warn("Nao foi possivel avisar o solicitante sobre a falha.", {
-              protocol: job.protocol,
-              error: notificationError,
-            });
+
+        const privatePdf = await whatsapp.sendPrivatePdfFile(job.sourceMessage, pdf.filePath, {
+          filename: `extrato-inss-${job.protocol}.pdf`,
+          caption: `Extrato INSS - protocolo ${job.protocol} - ${job.cpfMasked}`,
+        });
+
+        const [protocolDelivery, pdfDelivery] = await Promise.allSettled([
+          protocolMessage.delivery,
+          privatePdf.delivery,
+        ]);
+
+        if (protocolDelivery.status === "fulfilled") {
+          logger.info("Mensagem de protocolo entregue.", { protocol: job.protocol });
+        } else {
+          logger.warn("Mensagem de protocolo nao foi entregue.", {
+            protocol: job.protocol,
+            error: protocolDelivery.reason,
           });
+        }
+
+        if (pdfDelivery.status === "fulfilled") {
+          await fs.unlink(pdf.filePath);
+          logger.info("PDF temporario removido apos entrega confirmada.", { protocol: job.protocol });
+        } else {
+          logger.warn("PDF mantido no cache porque a entrega nao foi confirmada.", {
+            protocol: job.protocol,
+            error: pdfDelivery.reason,
+            filePath: pdf.filePath,
+          });
+        }
+      } catch (error) {
+        await whatsapp.sendPrivateText(
+          job.sourceMessage,
+          `Protocolo ${job.protocol}: ${publicFailureMessage(error?.code)}`,
+        ).catch(() => {});
         throw error;
       }
     },
   });
 
-  const handleUpdate = async (update) => {
-    const message = update.message;
-    if (!message?.from || typeof message.text !== "string") {
-      return;
-    }
+  await worker.prepareForManualLogin();
 
-    const userId = String(message.from.id);
-    const chatId = String(message.chat.id);
-    const command = parseIncomingText(message.text);
+  const shutdown = async (signal) => {
+    logger.info("Encerramento solicitado.", { signal });
+    queue.stopAccepting();
+    await Promise.allSettled([queue.waitForIdle(), whatsapp.stop(), worker.stop()]);
+    process.exit(0);
+  };
+  process.once("SIGINT", () => void shutdown("SIGINT"));
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
-    if (message.chat.type !== "private") {
-      if (["inss", "invalid_inss"].includes(command.type)) {
-        await telegram.sendMessage(chatId, "Por seguranca, envie o CPF em uma conversa privada com o bot.");
-      }
-      return;
-    }
+  await whatsapp.run(async ({ message }) => {
+    const text = message.body?.trim();
+    if (!looksLikeCpf(text)) return false;
 
-    const authorized = config.telegram.allowedUserIds.has(userId);
-    if (command.type === "my_id" || command.type === "help") {
-      await telegram.sendMessage(chatId, helpText(userId, authorized));
-      return;
-    }
-
-    if (!authorized) {
-      await telegram.sendMessage(chatId, helpText(userId, false));
-      return;
-    }
-
-    if (command.type === "invalid_inss") {
-      await telegram.sendMessage(chatId, "Informe o CPF depois do comando. Exemplo: <code>/inss 123.456.789-00</code>.");
-      return;
-    }
-
-    if (command.type === "invalid_status") {
-      await telegram.sendMessage(chatId, "Informe o protocolo. Exemplo: <code>/status ABCD1234</code>.");
-      return;
-    }
-
-    if (command.type === "status") {
-      const job = queue.getForRequester(command.protocol, userId);
-      if (!job) {
-        await telegram.sendMessage(chatId, "Protocolo nao encontrado para o seu usuario.");
-        return;
-      }
-
-      const position = job.position ? ` Posicao atual: ${job.position}.` : "";
-      await telegram.sendMessage(
-        chatId,
-        `Protocolo <code>${job.protocol}</code>: ${STATUS_LABELS[job.status] || job.status}.${position}`,
-      );
-      return;
-    }
-
-    if (command.type !== "inss") {
-      await telegram.sendMessage(chatId, helpText(userId, true));
-      return;
-    }
-
-    const cpf = normalizeCpf(command.cpf);
+    const cpf = normalizeCpf(text);
     if (!isValidCpf(cpf)) {
-      await telegram.sendMessage(chatId, "CPF invalido. Confira os 11 digitos e tente novamente.");
-      return;
+      await whatsapp.sendPrivateText(message, "CPF invalido. Confira os numeros e envie novamente no grupo.");
+      return true;
     }
 
     try {
-      const { job, duplicate } = queue.enqueue({ requesterId: userId, chatId, cpf });
+      const requesterId = message.author || message.from;
+      const { job, duplicate } = queue.enqueue({
+        requesterId,
+        chatId: requesterId,
+        cpf,
+        sourceMessage: message,
+      });
       if (duplicate) {
-        await telegram.sendMessage(
-          chatId,
-          `Essa consulta ja esta ${STATUS_LABELS[job.status]}. Protocolo <code>${job.protocol}</code>.`,
-        );
-        return;
+        await whatsapp.sendPrivateText(message, `Essa consulta ja esta em andamento. Protocolo ${job.protocol}.`);
+        return true;
       }
-
-      await telegram.sendMessage(
-        chatId,
-        `Solicitacao recebida para ${maskCpf(cpf)}. Protocolo <code>${job.protocol}</code>. Posicao: ${job.position}.`,
+      await whatsapp.sendPrivateText(
+        message,
+        `Solicitacao recebida para ${maskCpf(cpf)}. Protocolo ${job.protocol}. Posicao na fila: ${job.position}.`,
       );
     } catch (error) {
       if (error instanceof QueueFullError) {
-        await telegram.sendMessage(chatId, "A fila esta cheia no momento. Tente novamente em alguns minutos.");
-        return;
+        await whatsapp.sendPrivateText(message, "A fila esta cheia. Tente novamente em alguns minutos.");
+        return true;
       }
       throw error;
     }
-  };
-
-  const bot = await telegram.getMe();
-  logger.info("Bot Telegram conectado.", { botId: bot.id, botUsername: bot.username });
-
-  const requestShutdown = (signalName) => {
-    logger.info("Encerramento solicitado.", { signal: signalName });
-    queue.stopAccepting();
-    abortController.abort();
-  };
-  process.once("SIGINT", () => requestShutdown("SIGINT"));
-  process.once("SIGTERM", () => requestShutdown("SIGTERM"));
-
-  try {
-    await telegram.run(handleUpdate, { signal: abortController.signal });
-  } finally {
-    queue.stopAccepting();
-    await Promise.race([queue.waitForIdle(), delay(30_000)]);
-    await worker.stop();
-    logger.info("MVP encerrado.");
-  }
+    return true;
+  });
 }
 
 run().catch((error) => {
   const logger = createLogger({ level: process.env.LOG_LEVEL || "info" });
-  logger.error("Falha fatal ao iniciar o MVP.", { error });
+  logger.error("Falha fatal ao iniciar.", { error });
   process.exitCode = 1;
 });

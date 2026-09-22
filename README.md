@@ -1,29 +1,25 @@
-# Promobank x Telegram — MVP Extrato INSS
+# Promobank x WhatsApp
 
-MVP interno para receber um CPF em uma conversa privada do Telegram, colocar a solicitação em uma fila sequencial, consultar o Meu INSS no Promobank e devolver o PDF ao vendedor autorizado.
+Aplicativo local para receber CPFs no grupo **TESTE PROMOBANK**, consultar o módulo INSS no Promobank e entregar o PDF no WhatsApp privado de quem fez a solicitação.
 
-## Escopo desta versão
+## Funcionamento
 
-- Um bot Telegram por long polling, sem necessidade de domínio público ou webhook.
-- Apenas conversas privadas e usuários incluídos na lista de autorização.
-- CPF com ou sem pontuação, inclusive enviado sem comando.
-- Validação dos dígitos verificadores do CPF.
-- Uma fila em memória e um processamento por vez.
-- Login e perfil persistente do Chrome no computador autorizado.
-- Navegação até `Serviços → Meu INSS` dentro do iframe do Promobank.
-- Captura da nova aba HTTPS e download autenticado do PDF.
-- PDF mantido somente em memória até o envio ao Telegram.
-- Logs com CPF mascarado e URLs sem parâmetros.
+1. A TI inicia o aplicativo pela manhã.
+2. Uma janela dedicada do Chrome é aberta para o Promobank.
+3. A TI resolve qualquer captcha do Cloudflare e faz o login manual nessa janela.
+4. Na primeira execução, conecte o WhatsApp lendo o QR code exibido no terminal.
+5. Um participante envia somente o CPF no grupo `TESTE PROMOBANK`.
+6. O aplicativo completa zeros à esquerda até 11 dígitos, valida o CPF e executa uma consulta por vez.
+7. Confirmações, erros e o PDF são enviados no privado do solicitante.
 
-O MVP ainda não inclui SIAPE, segundo computador, banco de dados persistente ou painel administrativo.
+Mensagens de outros grupos, conversas privadas e textos que não sejam apenas um CPF são ignorados.
 
 ## Requisitos
 
 - Windows com Google Chrome instalado.
 - Node.js 22 ou superior.
-- Um bot criado pelo [@BotFather](https://t.me/BotFather).
-- Um login do Promobank autorizado para este computador.
-- O perfil do Chrome do robô não pode estar aberto em outro processo.
+- O número conectado precisa participar do grupo `TESTE PROMOBANK`.
+- O computador deve permanecer ligado e com o aplicativo em execução.
 
 ## Instalação
 
@@ -31,91 +27,44 @@ No PowerShell, dentro desta pasta:
 
 ```powershell
 npm.cmd install
-$configDir = Join-Path $env:LOCALAPPDATA 'PromobankTelegramBot'
+$configDir = Join-Path $env:LOCALAPPDATA 'PromobankWhatsAppBot'
 New-Item -ItemType Directory -Path $configDir -Force
 Copy-Item -LiteralPath '.env.example' -Destination (Join-Path $configDir '.env')
-notepad (Join-Path $configDir '.env')
-```
-
-O arquivo de configuração fica em `%LOCALAPPDATA%\PromobankTelegramBot\.env`, fora da pasta sincronizada pelo OneDrive. Configure, no mínimo:
-
-```dotenv
-TELEGRAM_BOT_TOKEN=token_recebido_do_botfather
-TELEGRAM_ALLOWED_USER_IDS=
-PROMOBANK_COMPANY=
-PROMOBANK_USERNAME=
-PROMOBANK_PASSWORD=
-```
-
-Não envie esse arquivo por Telegram, e-mail ou chat. Também é possível escolher outro caminho local definindo a variável de ambiente `PROMOBANK_ENV_FILE` antes de iniciar o processo.
-
-### Descobrir o ID de um vendedor
-
-1. Inicie o bot com `TELEGRAM_ALLOWED_USER_IDS` vazio.
-2. O vendedor abre uma conversa privada com o bot e envia `/meuid`.
-3. O bot informa somente o ID daquela pessoa.
-4. Pare o processo, abra novamente o arquivo em `%LOCALAPPDATA%\PromobankTelegramBot\.env`, adicione os IDs separados por vírgula e inicie novamente:
-
-```dotenv
-TELEGRAM_ALLOWED_USER_IDS=123456789,987654321
-```
-
-Com a lista vazia, nenhuma consulta é autorizada.
-
-`TELEGRAM_PROTECT_CONTENT=false` permite que o vendedor salve ou encaminhe o documento. Troque para `true` se a política interna exigir a proteção de conteúdo oferecida pelo Telegram.
-
-## Login do Promobank
-
-Há duas formas de operar:
-
-### Login automático
-
-Preencha as três variáveis abaixo no `.env`:
-
-```dotenv
-PROMOBANK_COMPANY=
-PROMOBANK_USERNAME=
-PROMOBANK_PASSWORD=
-```
-
-As três precisam estar preenchidas juntas. O robô não registra esses valores em logs.
-
-### Login manual assistido
-
-Deixe as três variáveis vazias. Na primeira solicitação, o Chrome dedicado abrirá a página do Promobank e o protocolo falhará solicitando intervenção. Faça o login manualmente nesse Chrome e reenvie a solicitação. Por padrão, a sessão será preservada em `%LOCALAPPDATA%\PromobankTelegramBot\chrome-profile`, fora do OneDrive.
-
-Use esse perfil somente para o robô. Não use o perfil padrão do vendedor e não abra o perfil do robô enquanto o processo estiver ativo.
-
-## Executar
-
-```powershell
 npm.cmd start
 ```
 
-Comandos disponíveis em conversa privada:
+O arquivo de configuração e as sessões ficam em `%LOCALAPPDATA%\PromobankWhatsAppBot`, fora do OneDrive.
+
+## Primeira conexão do WhatsApp
+
+Ao executar `npm.cmd start`, o terminal exibirá um QR code. No celular que possui o número de teste:
+
+1. Abra o WhatsApp.
+2. Acesse **Aparelhos conectados**.
+3. Selecione **Conectar aparelho**.
+4. Leia o QR code do terminal.
+
+Nas próximas execuções, a sessão será reutilizada enquanto o WhatsApp não a desconectar. Antes de aceitar qualquer CPF, o aplicativo consulta os grupos vinculados e exige encontrar exatamente um grupo chamado `TESTE PROMOBANK`.
+
+## Login diário no Promobank
+
+O Chrome exclusivo do Promobank abre automaticamente. Resolva qualquer captcha do Cloudflare e faça o login nessa janela. O aplicativo se conecta a esse Chrome por uma porta local dedicada e reutiliza a sessão enquanto ela estiver válida. Não abra esse mesmo perfil em outro processo.
+
+As credenciais `PROMOBANK_COMPANY`, `PROMOBANK_USERNAME` e `PROMOBANK_PASSWORD` podem permanecer vazias. Com este modo manual, o aplicativo não digita login, senha ou resolve captcha.
+
+O PDF é baixado em `%LOCALAPPDATA%\PromobankWhatsAppBot\pdf-cache` e enviado como documento no privado. Depois do upload, o arquivo é apagado automaticamente para evitar retenção desnecessária.
+
+## Formatos de CPF
+
+São aceitos no grupo:
 
 ```text
-/inss 123.456.789-00
-/status ABCD1234
-/meuid
-/ajuda
+529.982.247-25
+52998224725
+998224725
 ```
 
-O vendedor também pode enviar apenas o CPF.
-
-## Segurança operacional
-
-- O bot recusa consultas em grupos.
-- O acesso é validado pelo ID numérico do Telegram, não pelo nome de usuário.
-- O CPF completo existe somente na memória enquanto o trabalho está ativo.
-- O nome do PDF contém o protocolo, nunca o CPF.
-- A URL financeira do PDF é capturada dinamicamente e nunca é registrada com a query string.
-- O PDF não é salvo em disco pelo aplicativo.
-- Credenciais e sessão do Chrome ficam fora da pasta sincronizada pelo OneDrive.
-- Se o Promobank informar sessão em outro computador, o robô para. Ele não encerra a outra sessão automaticamente.
-- O perfil persistente deve ficar no mesmo computador vinculado ao login.
-
-Como o PDF passa pelo Telegram, a empresa deve validar internamente a base legal, a autorização de cada consulta e a política de uso/retensão do canal.
+O terceiro exemplo é transformado em `00998224725` antes da validação. Se os dígitos verificadores não forem válidos, o solicitante recebe o aviso no privado.
 
 ## Testes
 
@@ -123,23 +72,11 @@ Como o PDF passa pelo Telegram, a empresa deve validar internamente a base legal
 npm.cmd test
 ```
 
-Os testes locais não acessam o Promobank nem o Telegram.
+Os testes automatizados não acessam o WhatsApp nem o Promobank. O primeiro teste real deve usar um CPF autorizado e ser acompanhado pela TI.
 
-## Limitações conhecidas do MVP
+## Limitações
 
-- A fila é mantida em memória. Se o processo for encerrado, pedidos ainda não executados precisam ser reenviados.
-- Esta versão utiliza somente um login e um computador.
+- A conexão usa o protocolo de aparelhos vinculados e não a API oficial; mudanças do WhatsApp ou desconexões podem exigir atualização ou nova leitura do QR code.
+- A fila fica em memória. Pedidos pendentes precisam ser reenviados se o aplicativo for encerrado.
 - Alterações na interface do Promobank podem exigir atualização dos seletores.
-- CAPTCHA, 2FA e conflitos de sessão exigem intervenção humana.
-- O fluxo real precisa de um teste acompanhado com CPF autorizado antes de entrar em produção.
-
-## Próxima evolução
-
-Depois do piloto com um login, a segunda etapa separará o sistema em:
-
-```text
-Bot/coordenador → fila central → Worker A / Login A
-                              → Worker B / Login B
-```
-
-Cada worker continuará preso ao seu computador e processará somente um pedido por vez.
+- CAPTCHA, conflito de sessão ou avisos adicionais do Promobank exigem intervenção da TI.

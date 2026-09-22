@@ -1,9 +1,9 @@
 {
-  "name": "promobank-telegram-mvp",
+  "name": "promobank-whatsapp-mvp",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "MVP interno para solicitar Extrato INSS do Promobank por um bot do Telegram.",
+  "description": "MVP interno para solicitar Extrato INSS do Promobank por um grupo do WhatsApp.",
   "scripts": {
     "start": "node src/main.js",
     "test": "node --test",
@@ -13,6 +13,9 @@
     "node": ">=22"
   },
   "dependencies": {
-    "playwright-core": "^1.61.1"
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "pino": "^9.4.0",
+    "playwright-core": "^1.61.1",
+    "qrcode-terminal": "^0.12.0"
   }
 }

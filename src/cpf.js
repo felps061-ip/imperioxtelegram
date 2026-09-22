@@ -1,11 +1,12 @@
-const FORMATTED_CPF_PATTERN = /^(\d{3})\.?\s*(\d{3})\.?\s*(\d{3})-?\s*(\d{2})$/;
+const CPF_MESSAGE_PATTERN = /^(?:\d{1,11}|\d{3}\.\d{3}\.\d{3}-\d{2})$/;
 
 export function normalizeCpf(value) {
   if (typeof value !== "string" && typeof value !== "number") {
     return "";
   }
 
-  return String(value).replace(/\D/g, "");
+  const digits = String(value).replace(/\D/g, "");
+  return digits.length > 0 && digits.length <= 11 ? digits.padStart(11, "0") : digits;
 }
 
 export function isValidCpf(value) {
@@ -42,5 +43,5 @@ export function looksLikeCpf(value) {
   }
 
   const trimmed = value.trim();
-  return /^[\d.\-\s]+$/.test(trimmed) && FORMATTED_CPF_PATTERN.test(trimmed);
+  return CPF_MESSAGE_PATTERN.test(trimmed);
 }
