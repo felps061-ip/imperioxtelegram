@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { maskCpf, normalizeCpf } from "./cpf.js";
 
 const LEVELS = Object.freeze({ debug: 10, info: 20, warn: 30, error: 40 });
@@ -52,7 +53,7 @@ function sanitizeValue(value, depth = 0) {
   return value;
 }
 
-export function createLogger({ level = "info", sink = console } = {}) {
+export function createLogger({ level = "info", sink = console, filePath } = {}) {
   const threshold = LEVELS[level] ?? LEVELS.info;
 
   const write = (entryLevel, message, meta = {}) => {
@@ -67,8 +68,17 @@ export function createLogger({ level = "info", sink = console } = {}) {
       message: sanitizeString(message),
     };
 
+    const line = JSON.stringify(entry);
     const method = entryLevel === "error" ? "error" : entryLevel === "warn" ? "warn" : "log";
-    sink[method](JSON.stringify(entry));
+    sink[method](line);
+
+    if (filePath) {
+      try {
+        fs.appendFileSync(filePath, `${line}\n`);
+      } catch {
+        // Falha ao gravar arquivo nao deve interromper o bot.
+      }
+    }
   };
 
   return {

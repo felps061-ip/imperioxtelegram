@@ -1,9 +1,10 @@
 import { isValidCpf, looksLikeCpf, maskCpf, normalizeCpf } from "./cpf.js";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { loadConfig } from "./config.js";
 import { QueueFullError } from "./errors.js";
 import { InMemoryJobQueue } from "./job-queue.js";
-import { loadLocalEnvironment } from "./local-environment.js";
+import { getLocalApplicationDirectory, loadLocalEnvironment } from "./local-environment.js";
 import { createLogger } from "./logger.js";
 import { PromobankWorker } from "./promobank-worker.js";
 import { WhatsAppClient } from "./whatsapp-client.js";
@@ -19,7 +20,10 @@ function publicFailureMessage(code) {
 async function run() {
   loadLocalEnvironment();
   const config = loadConfig();
-  const logger = createLogger({ level: config.logLevel });
+  const logDirectory = path.join(getLocalApplicationDirectory(), "logs");
+  await fs.mkdir(logDirectory, { recursive: true });
+  const logFile = path.join(logDirectory, "bot-" + new Date().toISOString().slice(0, 10) + ".log");
+  const logger = createLogger({ level: config.logLevel, filePath: logFile });
   const worker = new PromobankWorker({ config: config.promobank, logger });
   const whatsapp = new WhatsAppClient({ config: config.whatsapp, logger });
 
