@@ -58,6 +58,7 @@ export class WhatsAppClient {
   #processed = new Set();
   #startedAtSeconds = Math.floor(Date.now() / 1_000);
   #participantPhoneJids = new Map();
+  #participantRefreshPromise;
   #validatedRecipients = new Map();
   #deliveryStatuses = new Map();
   #deliveryWaiters = new Map();
@@ -126,18 +127,7 @@ export class WhatsAppClient {
             );
           }
           this.#groupId = matches[0].id;
-          this.#participantPhoneJids.clear();
-          for (const participant of matches[0].participants || []) {
-            const phoneJid = participant.phoneNumber
-              ? jidNormalizedUser(participant.phoneNumber)
-              : participant.jid
-                ? jidNormalizedUser(participant.jid)
-                : undefined;
-            if (!phoneJid?.endsWith("@s.whatsapp.net")) continue;
-            for (const id of [participant.id, participant.lid]) {
-              if (id) this.#participantPhoneJids.set(jidNormalizedUser(id), phoneJid);
-            }
-          }
+          this.#indexParticipants(matches[0].participants);
           this.#logger.info("WhatsApp pronto e grupo confirmado.", {
             group: this.#groupName,
             participantsWithPrivateJid: this.#participantPhoneJids.size,
@@ -182,11 +172,19 @@ export class WhatsAppClient {
       });
       return;
     }
-    const author = resolvePrivateRecipientJid({
+    let author = resolvePrivateRecipientJid({
       key: message.key,
       socketUserId: this.#socket?.user?.id,
       participantPhoneJids: this.#participantPhoneJids,
     });
+    if (!author && message.key.participant?.endsWith("@lid")) {
+      await this.#refreshParticipants();
+      author = resolvePrivateRecipientJid({
+        key: message.key,
+        socketUserId: this.#socket?.user?.id,
+        participantPhoneJids: this.#participantPhoneJids,
+      });
+    }
     if (!author) {
       this.#logger.warn("Mensagem do grupo sem telefone privado identificavel.", {
         messageId,
@@ -261,6 +259,38 @@ export class WhatsAppClient {
     this.#stopping = true;
     this.#socket?.end(new Error("Encerramento solicitado."));
     this.#socket = undefined;
+  }
+
+  #indexParticipants(participants = []) {
+    for (const participant of participants) {
+      const phoneJid = participant.phoneNumber
+        ? jidNormalizedUser(participant.phoneNumber)
+        : participant.jid
+          ? jidNormalizedUser(participant.jid)
+          : undefined;
+      if (!phoneJid?.endsWith("@s.whatsapp.net")) continue;
+      for (const id of [participant.id, participant.lid]) {
+        if (id) this.#participantPhoneJids.set(jidNormalizedUser(id), phoneJid);
+      }
+    }
+  }
+
+  async #refreshParticipants() {
+    if (!this.#socket || !this.#groupId) return;
+    if (!this.#participantRefreshPromise) {
+      const socket = this.#socket;
+      this.#participantRefreshPromise = socket.groupMetadata(this.#groupId)
+        .then((metadata) => {
+          if (socket === this.#socket) this.#indexParticipants(metadata.participants);
+        })
+        .catch((error) => {
+          this.#logger.warn("Nao foi possivel atualizar os participantes do grupo.", { error });
+        })
+        .finally(() => {
+          this.#participantRefreshPromise = undefined;
+        });
+    }
+    await this.#participantRefreshPromise;
   }
 
   #privateRecipient(message) {
