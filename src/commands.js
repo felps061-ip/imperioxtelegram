@@ -1,11 +1,30 @@
 import { looksLikeCpf } from "./cpf.js";
 
+const CONTACT_KEYWORD_PATTERN = /(^|\s)(?:n(?:u|ú)meros?|nº|n|telefones?|contatos?|ctt|nmr)(?=\s|:|$)\s*:?\s*/giu;
+
+function parseContactRequest(text) {
+  let foundKeyword = false;
+  const cpfText = text.replace(CONTACT_KEYWORD_PATTERN, () => {
+    foundKeyword = true;
+    return " ";
+  }).replace(/\s+/g, " ").trim();
+
+  return foundKeyword && looksLikeCpf(cpfText)
+    ? { type: "contacts", cpf: cpfText }
+    : undefined;
+}
+
 export function parseIncomingText(text) {
   if (typeof text !== "string" || text.trim() === "") {
     return { type: "unknown" };
   }
 
   const trimmed = text.trim();
+  const contactRequest = parseContactRequest(trimmed);
+  if (contactRequest) {
+    return contactRequest;
+  }
+
   if (looksLikeCpf(trimmed)) {
     return { type: "inss", cpf: trimmed };
   }

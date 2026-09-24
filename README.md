@@ -8,11 +8,13 @@ Aplicativo local para receber CPFs no grupo **TESTE PROMOBANK**, consultar o mó
 2. Uma janela dedicada do Chrome é aberta para o Promobank.
 3. A TI resolve qualquer captcha do Cloudflare e faz o login manual nessa janela.
 4. Na primeira execução, conecte o WhatsApp lendo o QR code exibido no terminal.
-5. Um participante envia somente o CPF no grupo `TESTE PROMOBANK`.
+5. Um participante envia o CPF no grupo `TESTE PROMOBANK`, sozinho ou acompanhado da palavra `CPF`.
 6. O aplicativo completa zeros à esquerda até 11 dígitos, valida o CPF e executa uma consulta por vez.
-7. Confirmações, erros e o PDF são enviados no privado do solicitante.
+7. O aplicativo identifica as matrículas do grupo **Ativo** em “Outras matrículas”.
+8. Um PDF é gerado para cada matrícula ativa e todos são enviados no privado do solicitante.
+9. Quando o CPF é acompanhado de uma palavra de contatos, o aplicativo consulta **+ CONTATOS** e envia todos os telefones encontrados no privado, um por linha.
 
-Mensagens de outros grupos, conversas privadas e textos que não sejam apenas um CPF são ignorados.
+Mensagens de outros grupos, conversas privadas e textos que não correspondam aos formatos de CPF aceitos são ignorados.
 
 ## Requisitos
 
@@ -60,11 +62,25 @@ São aceitos no grupo:
 
 ```text
 529.982.247-25
+529.982.247.25
+529 982 247 25
 52998224725
 998224725
+CPF: 529.982.247-25
+cpf 52998224725
+529.982.247-25 CPF
 ```
 
 O terceiro exemplo é transformado em `00998224725` antes da validação. Se os dígitos verificadores não forem válidos, o solicitante recebe o aviso no privado.
+
+Para consultar telefones, acrescente antes ou depois do CPF uma destas palavras:
+
+```text
+número  numero  números  numeros  n  nº
+telefone  telefones  contato  contatos  ctt  nmr
+```
+
+Exemplos: `529.982.247-25 telefone`, `CPF: 52998224725 contatos` e `nº 529 982 247 25`.
 
 ## Testes
 

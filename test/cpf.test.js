@@ -15,9 +15,21 @@ test("valida digitos verificadores e rejeita sequencias", () => {
   assert.equal(isValidCpf("123"), false);
 });
 
-test("mascara CPF e reconhece uma mensagem composta apenas pelo documento", () => {
+test("mascara CPF e reconhece os formatos aceitos no grupo", () => {
   assert.equal(maskCpf("52998224725"), "***.***.***-25");
   assert.equal(looksLikeCpf("529.982.247-25"), true);
+  assert.equal(looksLikeCpf("529.982.247.25"), true);
+  assert.equal(looksLikeCpf("529 982 247 25"), true);
+  assert.equal(looksLikeCpf("CPF: 529.982.247-25"), true);
+  assert.equal(looksLikeCpf("cpf 529 982 247 25"), true);
+  assert.equal(looksLikeCpf("529.982.247-25 CPF"), true);
+  assert.equal(looksLikeCpf("52998224725 cpf"), true);
   assert.equal(looksLikeCpf("consultar 529.982.247-25"), false);
+  assert.equal(looksLikeCpf("CPF: 529.982.247-25 agora"), false);
   assert.equal(looksLikeCpf("998224725"), true);
+});
+
+test("normaliza CPF mesmo quando a mensagem inclui a identificacao", () => {
+  assert.equal(normalizeCpf("CPF: 529.982.247-25"), "52998224725");
+  assert.equal(normalizeCpf("529 982 247 25 cpf"), "52998224725");
 });

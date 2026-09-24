@@ -14,7 +14,49 @@ const SELECTORS = Object.freeze({
   appFrame: 'iframe[src*="/l/atendimento"]',
   cpfInput: 'input[data-tour="input-consulta"]',
   searchButton: "#consultarCliente",
+  enrollmentSelect: 'div.p-select:has(> span.p-select-label[role="combobox"][aria-label^="NB "])',
 });
+
+function normalizedLabel(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+export function activeEnrollmentLabels(entries) {
+  const active = [];
+  let activeGroup = false;
+
+  for (const entry of entries || []) {
+    if (entry?.kind === "group") {
+      activeGroup = normalizedLabel(entry.text).startsWith("ativo");
+    } else if (entry?.kind === "option" && activeGroup) {
+      const label = String(entry.text || "").trim();
+      if (label && !active.includes(label)) active.push(label);
+    }
+  }
+
+  return active;
+}
+
+export function followingActiveEnrollmentLabels(entries, currentEnrollment) {
+  const active = activeEnrollmentLabels(entries);
+  const currentIndex = active.indexOf(String(currentEnrollment || "").trim());
+  return currentIndex === -1 ? [] : active.slice(currentIndex + 1);
+}
+
+export function uniquePhoneNumbers(values) {
+  const phones = [];
+  for (const value of values || []) {
+    const digits = String(value || "").replace(/\D/g, "");
+    if ((digits.length === 10 || digits.length === 11) && !phones.includes(digits)) {
+      phones.push(digits);
+    }
+  }
+  return phones;
+}
 
 export function assertAllowedPdfUrl(value, baseUrl) {
   let candidate, base;
@@ -129,6 +171,11 @@ export class PromobankWorker {
   }
 
   async fetchInssPdf(cpf, protocol, downloadDirectory = this.#config.downloadDirectory) {
+    const pdfs = await this.fetchInssPdfs(cpf, protocol, downloadDirectory);
+    return pdfs[0];
+  }
+
+  async fetchInssPdfs(cpf, protocol, downloadDirectory = this.#config.downloadDirectory) {
     if (this.#busy) throw new PromobankAutomationError("WORKER_BUSY", "Worker ocupado.");
     this.#busy = true;
 
@@ -143,23 +190,165 @@ export class PromobankWorker {
 
       const printButton = frame.locator('button:has-text("Ver Impressão")');
       await printButton.waitFor({ state: "visible", timeout: this.#config.queryTimeoutMs });
+      const hasOtherEnrollments = await this.#hasOtherEnrollments(frame);
+      const currentEnrollment = hasOtherEnrollments ? await this.#currentEnrollment(frame) : undefined;
+      const pdfs = [await this.#downloadCurrentEnrollmentPdf(
+        frame,
+        protocol,
+        downloadDirectory,
+        currentEnrollment,
+        0,
+        hasOtherEnrollments,
+      )];
 
-      let popup;
-      try {
-        [popup] = await Promise.all([
-          this.#context.waitForEvent("page", { timeout: this.#config.pdfTimeoutMs }),
-          printButton.click(),
-        ]);
-        await popup.waitForURL(url => url.toString() !== "about:blank", { timeout: this.#config.pdfTimeoutMs, waitUntil: "commit" });
-        assertAllowedPdfUrl(popup.url(), this.#config.baseUrl);
-        await popup.waitForLoadState("domcontentloaded", { timeout: this.#config.pdfTimeoutMs });
-        await popup.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
-        return await this.#downloadPdfFromPrintPage(popup, protocol, downloadDirectory);
-      } catch (error) {
-        if (!(error instanceof PromobankAutomationError)) throw new PromobankAutomationError("PDF_POPUP_FAILED", "PDF Popup falhou.", { cause: error });
-        throw error;
-      } finally { if (popup) await popup.close().catch(() => {}); }
+      if (hasOtherEnrollments) {
+        const followingEnrollments = await this.#followingActiveEnrollments(frame, currentEnrollment);
+        for (let index = 0; index < followingEnrollments.length; index += 1) {
+          const enrollment = followingEnrollments[index];
+          await this.#selectEnrollment(frame, enrollment);
+          pdfs.push(await this.#downloadCurrentEnrollmentPdf(
+            frame,
+            protocol,
+            downloadDirectory,
+            enrollment,
+            index + 1,
+            true,
+          ));
+        }
+      }
+
+      this.#logger.info("PDFs das matriculas ativas preparados.", {
+        protocol,
+        activeEnrollments: pdfs.length,
+        otherEnrollmentsField: hasOtherEnrollments,
+      });
+      return pdfs;
     } finally { this.#busy = false; }
+  }
+
+  async fetchContactPhones(cpf, protocol) {
+    if (this.#busy) throw new PromobankAutomationError("WORKER_BUSY", "Worker ocupado.");
+    this.#busy = true;
+
+    try {
+      await this.start();
+      await this.#ensureAuthenticated();
+      const { frame, foneHotCard } = await this.#openContacts();
+      const cpfInput = foneHotCard.locator('input[placeholder="CPF"].p-inputmask').first();
+      const queryButton = foneHotCard.getByRole("button", { name: "Consultar", exact: true }).first();
+
+      await queryButton.waitFor({ state: "visible", timeout: 15_000 });
+      await cpfInput.fill(cpf);
+      const response = this.#page.waitForResponse(
+        (candidate) => ["fetch", "xhr"].includes(candidate.request().resourceType()),
+        { timeout: 5_000 },
+      ).catch(() => undefined);
+      await queryButton.click();
+      await response;
+      await this.#page.waitForTimeout(500);
+
+      const phoneHeader = frame.locator("th").filter({ hasText: /^\s*Telefone\s*$/ }).first();
+      await phoneHeader.waitFor({ state: "visible", timeout: this.#config.queryTimeoutMs });
+      const phoneTable = phoneHeader.locator("xpath=ancestor::table");
+      const firstColumnValues = await phoneTable
+        .locator('tbody tr td[data-pc-section="bodycell"]:first-child')
+        .allInnerTexts();
+      const phones = uniquePhoneNumbers(firstColumnValues);
+
+      this.#logger.info("Consulta de contatos concluida.", {
+        protocol,
+        phonesFound: phones.length,
+      });
+      return phones;
+    } finally {
+      this.#busy = false;
+    }
+  }
+
+  async #hasOtherEnrollments(frame) {
+    const label = frame.locator("label").filter({ hasText: /^\s*Outras matrículas\s*$/ });
+    return (await label.count().catch(() => 0)) > 0;
+  }
+
+  async #currentEnrollment(frame) {
+    const select = frame.locator(SELECTORS.enrollmentSelect).first();
+    await select.waitFor({ state: "visible", timeout: 5_000 });
+    const label = select.locator('span.p-select-label[role="combobox"]').first();
+    return (await label.getAttribute("aria-label"))?.trim() || (await label.innerText()).trim();
+  }
+
+  async #followingActiveEnrollments(frame, currentEnrollment) {
+    const select = frame.locator(SELECTORS.enrollmentSelect).first();
+    await select.click();
+    const listbox = frame.locator('[role="listbox"]').filter({ visible: true }).first();
+    await listbox.waitFor({ state: "visible", timeout: 5_000 });
+    const entries = await listbox.evaluate((element) => Array.from(
+      element.querySelectorAll('.p-select-option-group, [data-pc-section="optiongroup"], [role="option"]'),
+    ).map((item) => ({
+      // PrimeVue also assigns role="option" to group headings. Identify
+      // those headings by their component section before checking options.
+      kind: item.matches('.p-select-option-group, [data-pc-section="optiongroup"]') ? "group" : "option",
+      text: item.textContent || "",
+    })));
+    const active = activeEnrollmentLabels(entries);
+    const following = followingActiveEnrollmentLabels(entries, currentEnrollment);
+    const selectedLabel = select.locator('span.p-select-label[role="combobox"]').first();
+    await selectedLabel.press("Escape").catch(() => {});
+
+    if (!active.includes(currentEnrollment)) {
+      throw new PromobankAutomationError(
+        "CURRENT_ENROLLMENT_NOT_ACTIVE",
+        "A matricula atual nao foi localizada no grupo Ativo.",
+      );
+    }
+
+    this.#logger.info("Proximas matriculas ativas identificadas.", { count: following.length });
+    return following;
+  }
+
+  async #selectEnrollment(frame, enrollment) {
+    if (!enrollment) return;
+    const select = frame.locator(SELECTORS.enrollmentSelect).first();
+    const label = select.locator('span.p-select-label[role="combobox"]').first();
+    const current = (await label.getAttribute("aria-label"))?.trim() || (await label.innerText()).trim();
+    if (current === enrollment) return;
+
+    await select.click();
+    const listbox = frame.locator('[role="listbox"]').filter({ visible: true }).first();
+    await listbox.getByRole("option", { name: enrollment, exact: true }).click();
+    await this.#page.waitForTimeout(1_000);
+    await frame.locator('button:has-text("Ver Impressão")').waitFor({
+      state: "visible",
+      timeout: this.#config.queryTimeoutMs,
+    });
+  }
+
+  async #downloadCurrentEnrollmentPdf(frame, protocol, downloadDirectory, enrollment, index, multiple) {
+    const printButton = frame.locator('button:has-text("Ver Impressão")');
+    let popup;
+    try {
+      [popup] = await Promise.all([
+        this.#context.waitForEvent("page", { timeout: this.#config.pdfTimeoutMs }),
+        printButton.click(),
+      ]);
+      await popup.waitForURL(url => url.toString() !== "about:blank", { timeout: this.#config.pdfTimeoutMs, waitUntil: "commit" });
+      assertAllowedPdfUrl(popup.url(), this.#config.baseUrl);
+      await popup.waitForLoadState("domcontentloaded", { timeout: this.#config.pdfTimeoutMs });
+      await popup.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+      return await this.#downloadPdfFromPrintPage(
+        popup,
+        protocol,
+        downloadDirectory,
+        { enrollment, index, multiple },
+      );
+    } catch (error) {
+      if (!(error instanceof PromobankAutomationError)) {
+        throw new PromobankAutomationError("PDF_POPUP_FAILED", "PDF Popup falhou.", { cause: error });
+      }
+      throw error;
+    } finally {
+      if (popup) await popup.close().catch(() => {});
+    }
   }
 
   async #ensureAuthenticated() {
@@ -187,7 +376,24 @@ export class PromobankWorker {
     return frame;
   }
 
-  async #downloadPdfFromPrintPage(printPage, protocol, downloadDirectory) {
+  async #openContacts() {
+    const frame = this.#page.frameLocator(SELECTORS.appFrame);
+    const contactsButton = frame.getByRole("button", { name: /^\s*\+?\s*Contatos\s*$/i }).first();
+    await contactsButton.waitFor({ state: "visible", timeout: 15_000 });
+    await contactsButton.click();
+    const foneHotTitle = frame.getByText("Consultar FoneHOT", { exact: true }).first();
+    await foneHotTitle.waitFor({ state: "visible", timeout: 15_000 });
+    const foneHotCard = foneHotTitle.locator(
+      'xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " p-card-body ")][1]',
+    );
+    await foneHotCard.locator('input[placeholder="CPF"].p-inputmask').first().waitFor({
+      state: "visible",
+      timeout: 15_000,
+    });
+    return { frame, foneHotCard };
+  }
+
+  async #downloadPdfFromPrintPage(printPage, protocol, downloadDirectory, { enrollment, index = 0, multiple = false } = {}) {
     const result = await printPage.evaluate(async ({ url, maxBytes }) => {
       const response = await fetch(url, { credentials: "include" });
       const buffer = await response.arrayBuffer();
@@ -214,10 +420,12 @@ export class PromobankWorker {
 
     if (bytes.byteLength > this.#config.maxPdfBytes || !isPdfBuffer(bytes)) throw new PromobankAutomationError("INVALID_PDF", "PDF inválido.");
     await fs.mkdir(downloadDirectory, { recursive: true });
-    const filename = `extrato-inss-${protocol}.pdf`;
+    const filename = multiple
+      ? `extrato-inss-${protocol}-${index + 1}.pdf`
+      : `extrato-inss-${protocol}.pdf`;
     const filePath = path.join(downloadDirectory, filename);
     await fs.writeFile(filePath, bytes);
     this.#logger.info("PDF original baixado da pagina de impressao.", { protocol, bytes: bytes.byteLength, filePath });
-    return { filePath, bytes: Buffer.from(bytes) };
+    return { filePath, bytes: Buffer.from(bytes), enrollment };
   }
 }

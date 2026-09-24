@@ -1,4 +1,4 @@
-const CPF_MESSAGE_PATTERN = /^(?:\d{1,11}|\d{3}\.\d{3}\.\d{3}-\d{2})$/;
+const CPF_MESSAGE_PATTERN = /^(?:cpf\s*:?\s*)?(?:\d{1,11}|\d{3}[.\s-]\d{3}[.\s-]\d{3}[.\s-]\d{2})(?:\s+cpf)?$/i;
 
 export function normalizeCpf(value) {
   if (typeof value !== "string" && typeof value !== "number") {

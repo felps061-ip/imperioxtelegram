@@ -1,6 +1,7 @@
-import { isValidCpf, looksLikeCpf, maskCpf, normalizeCpf } from "./cpf.js";
+import { isValidCpf, maskCpf, normalizeCpf } from "./cpf.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { parseIncomingText } from "./commands.js";
 import { loadConfig } from "./config.js";
 import { QueueFullError } from "./errors.js";
 import { InMemoryJobQueue } from "./job-queue.js";
@@ -31,31 +32,59 @@ async function run() {
     logger,
     maxPending: config.queue.maxPending,
     handler: async (job) => {
+      const contactRequest = job.requestType === "contacts";
       const protocolMessage = await whatsapp.sendPrivateText(
         job.sourceMessage,
-        `Protocolo ${job.protocol}: iniciando a consulta de ${job.cpfMasked}.`,
+        contactRequest
+          ? `Protocolo ${job.protocol}: iniciando a consulta de contatos de ${job.cpfMasked}.`
+          : `Protocolo ${job.protocol}: iniciando a consulta de ${job.cpfMasked}.`,
       );
 
       try {
-        const pdf = await worker.fetchInssPdf(job.cpf, job.protocol, config.promobank.downloadDirectory);
-        const savedPdf = await fs.stat(pdf.filePath);
-        if (!savedPdf.isFile() || savedPdf.size !== pdf.bytes.byteLength) {
-          throw new Error("O PDF salvo nao corresponde ao arquivo preparado para envio.");
+        if (contactRequest) {
+          const phones = await worker.fetchContactPhones(job.cpf, job.protocol);
+          const resultText = phones.length > 0
+            ? `Protocolo ${job.protocol} - telefones encontrados para ${job.cpfMasked}:\n${phones.join("\n")}`
+            : `Protocolo ${job.protocol}: nenhum telefone encontrado para ${job.cpfMasked}.`;
+          const resultMessage = await whatsapp.sendPrivateText(job.sourceMessage, resultText);
+          const [protocolDelivery, resultDelivery] = await Promise.allSettled([
+            protocolMessage.delivery,
+            resultMessage.delivery,
+          ]);
+          logger.info("Entrega da consulta de contatos processada.", {
+            protocol: job.protocol,
+            protocolDelivered: protocolDelivery.status === "fulfilled",
+            resultDelivered: resultDelivery.status === "fulfilled",
+            phonesFound: phones.length,
+          });
+          return;
         }
-        logger.info("PDF confirmado no disco antes do envio.", {
+
+        const pdfs = await worker.fetchInssPdfs(job.cpf, job.protocol, config.promobank.downloadDirectory);
+        for (const pdf of pdfs) {
+          const savedPdf = await fs.stat(pdf.filePath);
+          if (!savedPdf.isFile() || savedPdf.size !== pdf.bytes.byteLength) {
+            throw new Error("Um PDF salvo nao corresponde ao arquivo preparado para envio.");
+          }
+        }
+        logger.info("PDFs confirmados no disco antes do envio.", {
           protocol: job.protocol,
-          bytes: savedPdf.size,
-          filePath: pdf.filePath,
+          count: pdfs.length,
         });
 
-        const privatePdf = await whatsapp.sendPrivatePdfFile(job.sourceMessage, pdf.filePath, {
-          filename: `extrato-inss-${job.protocol}.pdf`,
-          caption: `Extrato INSS - protocolo ${job.protocol} - ${job.cpfMasked}`,
-        });
+        const privatePdfs = [];
+        for (let index = 0; index < pdfs.length; index += 1) {
+          const pdf = pdfs[index];
+          const enrollment = pdf.enrollment ? ` - ${pdf.enrollment}` : "";
+          privatePdfs.push(await whatsapp.sendPrivatePdfFile(job.sourceMessage, pdf.filePath, {
+            filename: path.basename(pdf.filePath),
+            caption: `Extrato INSS ${index + 1}/${pdfs.length} - protocolo ${job.protocol} - ${job.cpfMasked}${enrollment}`,
+          }));
+        }
 
-        const [protocolDelivery, pdfDelivery] = await Promise.allSettled([
+        const [protocolDelivery, ...pdfDeliveries] = await Promise.allSettled([
           protocolMessage.delivery,
-          privatePdf.delivery,
+          ...privatePdfs.map((privatePdf) => privatePdf.delivery),
         ]);
 
         if (protocolDelivery.status === "fulfilled") {
@@ -67,15 +96,25 @@ async function run() {
           });
         }
 
-        if (pdfDelivery.status === "fulfilled") {
-          await fs.unlink(pdf.filePath);
-          logger.info("PDF temporario removido apos entrega confirmada.", { protocol: job.protocol });
-        } else {
-          logger.warn("PDF mantido no cache porque a entrega nao foi confirmada.", {
-            protocol: job.protocol,
-            error: pdfDelivery.reason,
-            filePath: pdf.filePath,
-          });
+        for (let index = 0; index < pdfDeliveries.length; index += 1) {
+          const delivery = pdfDeliveries[index];
+          const pdf = pdfs[index];
+          if (delivery.status === "fulfilled") {
+            await fs.unlink(pdf.filePath);
+            logger.info("PDF temporario removido apos entrega confirmada.", {
+              protocol: job.protocol,
+              document: index + 1,
+              total: pdfs.length,
+            });
+          } else {
+            logger.warn("PDF mantido no cache porque a entrega nao foi confirmada.", {
+              protocol: job.protocol,
+              document: index + 1,
+              total: pdfs.length,
+              error: delivery.reason,
+              filePath: pdf.filePath,
+            });
+          }
         }
       } catch (error) {
         await whatsapp.sendPrivateText(
@@ -100,9 +139,10 @@ async function run() {
 
   await whatsapp.run(async ({ message }) => {
     const text = message.body?.trim();
-    if (!looksLikeCpf(text)) return false;
+    const request = parseIncomingText(text);
+    if (!["inss", "contacts"].includes(request.type)) return false;
 
-    const cpf = normalizeCpf(text);
+    const cpf = normalizeCpf(request.cpf);
     if (!isValidCpf(cpf)) {
       await whatsapp.sendPrivateText(message, "CPF invalido. Confira os numeros e envie novamente no grupo.");
       return true;
@@ -114,6 +154,7 @@ async function run() {
         requesterId,
         chatId: requesterId,
         cpf,
+        requestType: request.type,
         sourceMessage: message,
       });
       if (duplicate) {

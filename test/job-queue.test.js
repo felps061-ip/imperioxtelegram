@@ -52,3 +52,23 @@ test("reaproveita protocolo de uma consulta duplicada ainda ativa", async () => 
   release();
   await queue.waitForIdle();
 });
+
+test("permite tipos diferentes de consulta para o mesmo CPF", async () => {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const queue = new InMemoryJobQueue({
+    logger: silentLogger,
+    handler: async () => gate,
+  });
+
+  const inss = queue.enqueue({ requesterId: "1", chatId: "1", cpf: "52998224725", requestType: "inss" });
+  const contacts = queue.enqueue({ requesterId: "1", chatId: "1", cpf: "52998224725", requestType: "contacts" });
+
+  assert.equal(inss.duplicate, false);
+  assert.equal(contacts.duplicate, false);
+  assert.notEqual(inss.job.protocol, contacts.job.protocol);
+  release();
+  await queue.waitForIdle();
+});

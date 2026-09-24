@@ -37,13 +37,13 @@ export class InMemoryJobQueue {
     this.#retention = retention;
   }
 
-  enqueue({ requesterId, chatId, cpf, sourceMessage }) {
+  enqueue({ requesterId, chatId, cpf, sourceMessage, requestType = "inss" }) {
     if (this.#stopped) {
       throw new Error("A fila esta encerrada.");
     }
 
     const requesterKey = String(requesterId);
-    const deduplicationKey = `${requesterKey}:${cpf}`;
+    const deduplicationKey = `${requesterKey}:${requestType}:${cpf}`;
     const existingProtocol = this.#deduplication.get(deduplicationKey);
     if (existingProtocol) {
       const existing = this.#jobs.get(existingProtocol);
@@ -62,6 +62,7 @@ export class InMemoryJobQueue {
       requesterId: requesterKey,
       chatId: String(chatId),
       cpf,
+      requestType,
       sourceMessage,
       cpfMasked: maskCpf(cpf),
       deduplicationKey,
