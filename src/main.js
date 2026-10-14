@@ -14,6 +14,7 @@ function publicFailureMessage(code) {
   if (["LOGIN_REQUIRED", "LOGIN_FAILED", "LOGIN_PAGE_UNAVAILABLE"].includes(code)) {
     return "A sessao do Promobank precisa do login manual da TI no Chrome dedicado.";
   }
+  if (code === "NO_ACTIVE_ENROLLMENTS") return "nenhuma matricula ativa foi encontrada para este CPF.";
   if (code === "QUERY_TIMEOUT") return "O Promobank nao disponibilizou a impressao no prazo.";
   return "Nao foi possivel concluir a consulta. A TI verificara o erro.";
 }

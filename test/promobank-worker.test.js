@@ -6,6 +6,7 @@ import {
   enrollmentLabels,
   followingActiveEnrollmentLabels,
   isPdfBuffer,
+  remainingActiveEnrollmentLabels,
   uniquePhoneNumbers,
 } from "../src/promobank-worker.js";
 
@@ -83,6 +84,21 @@ test("apos o PDF atual seleciona somente as proximas matriculas ativas", () => {
   assert.deepEqual(
     followingActiveEnrollmentLabels(entries, "NB 506.299.677-1 / ESP. 32"),
     [],
+  );
+});
+
+test("seleciona matrículas ativas mesmo quando a atual está cessada", () => {
+  const entries = [
+    { kind: "group", text: "Cessado" },
+    { kind: "option", text: "NB 111.222.333-4 / ESP. 31" },
+    { kind: "group", text: "Ativo" },
+    { kind: "option", text: "NB 148.667.480-9 / ESP. 21" },
+    { kind: "option", text: "NB 506.299.677-1 / ESP. 32" },
+  ];
+
+  assert.deepEqual(
+    remainingActiveEnrollmentLabels(entries, "NB 111.222.333-4 / ESP. 31"),
+    ["NB 148.667.480-9 / ESP. 21", "NB 506.299.677-1 / ESP. 32"],
   );
 });
 

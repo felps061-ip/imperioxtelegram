@@ -47,6 +47,11 @@ export function followingActiveEnrollmentLabels(entries, currentEnrollment) {
   return currentIndex === -1 ? [] : active.slice(currentIndex + 1);
 }
 
+export function remainingActiveEnrollmentLabels(entries, currentEnrollment) {
+  const current = String(currentEnrollment || "").trim();
+  return activeEnrollmentLabels(entries).filter((label) => label !== current);
+}
+
 export function enrollmentLabels(entries) {
   const enrollments = [];
   for (const entry of entries || []) {
@@ -210,33 +215,45 @@ export class PromobankWorker {
       await printButton.waitFor({ state: "visible", timeout: this.#config.queryTimeoutMs });
       const hasOtherEnrollments = await this.#hasOtherEnrollments(frame);
       const currentEnrollment = hasOtherEnrollments ? await this.#currentEnrollment(frame) : undefined;
-      const pdfs = [await this.#downloadCurrentEnrollmentPdf(
-        frame,
-        protocol,
-        downloadDirectory,
-        currentEnrollment,
-        0,
-        hasOtherEnrollments,
-        benefit,
-      )];
+      const activeEnrollments = benefit === "inss" && hasOtherEnrollments
+        ? await this.#activeEnrollments(frame)
+        : undefined;
+      if (benefit === "inss" && hasOtherEnrollments && activeEnrollments.length === 0) {
+        throw new PromobankAutomationError("NO_ACTIVE_ENROLLMENTS", "Nenhuma matricula ativa foi localizada.");
+      }
 
-      if (hasOtherEnrollments) {
-        const followingEnrollments = benefit === "siape"
+      const currentIsEligible = benefit === "siape" || !hasOtherEnrollments || activeEnrollments.includes(currentEnrollment);
+      const remainingEnrollments = !hasOtherEnrollments
+        ? []
+        : benefit === "siape"
           ? await this.#followingSiapeEnrollments(frame, currentEnrollment)
-          : await this.#followingActiveEnrollments(frame, currentEnrollment);
-        for (let index = 0; index < followingEnrollments.length; index += 1) {
-          const enrollment = followingEnrollments[index];
+          : activeEnrollments.filter((enrollment) => enrollment !== currentEnrollment);
+      const totalPdfs = (currentIsEligible ? 1 : 0) + remainingEnrollments.length;
+      const pdfs = [];
+
+      if (currentIsEligible) {
+        pdfs.push(await this.#downloadCurrentEnrollmentPdf(
+          frame,
+          protocol,
+          downloadDirectory,
+          currentEnrollment,
+          pdfs.length,
+          totalPdfs > 1,
+          benefit,
+        ));
+      }
+
+      for (const enrollment of remainingEnrollments) {
           await this.#selectEnrollment(frame, enrollment);
           pdfs.push(await this.#downloadCurrentEnrollmentPdf(
             frame,
             protocol,
             downloadDirectory,
             enrollment,
-            index + 1,
-            true,
+            pdfs.length,
+            totalPdfs > 1,
             benefit,
           ));
-        }
       }
 
       this.#logger.info("PDFs das matriculas preparados.", {
@@ -314,6 +331,13 @@ export class PromobankWorker {
 
     this.#logger.info("Proximas matriculas ativas identificadas.", { count: following.length });
     return following;
+  }
+
+  async #activeEnrollments(frame) {
+    const { entries } = await this.#enrollmentEntries(frame);
+    const active = activeEnrollmentLabels(entries);
+    this.#logger.info("Matriculas ativas identificadas.", { count: active.length });
+    return active;
   }
 
   async #followingSiapeEnrollments(frame, currentEnrollment) {
