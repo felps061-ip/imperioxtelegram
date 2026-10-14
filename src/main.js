@@ -33,11 +33,13 @@ async function run() {
     maxPending: config.queue.maxPending,
     handler: async (job) => {
       const contactRequest = job.requestType === "contacts";
+      const siapeRequest = job.requestType === "siape";
+      const benefitName = siapeRequest ? "SIAPE" : "INSS";
       const protocolMessage = await whatsapp.sendPrivateText(
         job.sourceMessage,
         contactRequest
           ? `Protocolo ${job.protocol}: iniciando a consulta de contatos de ${job.cpfMasked}.`
-          : `Protocolo ${job.protocol}: iniciando a consulta de ${job.cpfMasked}.`,
+          : `Protocolo ${job.protocol}: iniciando a consulta ${benefitName} de ${job.cpfMasked}.`,
       );
 
       try {
@@ -60,7 +62,9 @@ async function run() {
           return;
         }
 
-        const pdfs = await worker.fetchInssPdfs(job.cpf, job.protocol, config.promobank.downloadDirectory);
+        const pdfs = siapeRequest
+          ? await worker.fetchSiapePdfs(job.cpf, job.protocol, config.promobank.downloadDirectory)
+          : await worker.fetchInssPdfs(job.cpf, job.protocol, config.promobank.downloadDirectory);
         for (const pdf of pdfs) {
           const savedPdf = await fs.stat(pdf.filePath);
           if (!savedPdf.isFile() || savedPdf.size !== pdf.bytes.byteLength) {
@@ -78,7 +82,7 @@ async function run() {
           const enrollment = pdf.enrollment ? ` - ${pdf.enrollment}` : "";
           privatePdfs.push(await whatsapp.sendPrivatePdfFile(job.sourceMessage, pdf.filePath, {
             filename: path.basename(pdf.filePath),
-            caption: `Extrato INSS ${index + 1}/${pdfs.length} - protocolo ${job.protocol} - ${job.cpfMasked}${enrollment}`,
+            caption: `Extrato ${benefitName} ${index + 1}/${pdfs.length} - protocolo ${job.protocol} - ${job.cpfMasked}${enrollment}`,
           }));
         }
 
@@ -140,7 +144,7 @@ async function run() {
   await whatsapp.run(async ({ message }) => {
     const text = message.body?.trim();
     const request = parseIncomingText(text);
-    if (!["inss", "contacts"].includes(request.type)) return false;
+    if (!["inss", "siape", "contacts"].includes(request.type)) return false;
 
     const cpf = normalizeCpf(request.cpf);
     if (!isValidCpf(cpf)) {

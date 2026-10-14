@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   activeEnrollmentLabels,
   assertAllowedPdfUrl,
+  enrollmentLabels,
   followingActiveEnrollmentLabels,
   isPdfBuffer,
   uniquePhoneNumbers,
@@ -53,6 +54,17 @@ test("nao trata matricula cessada como ativa quando o grupo Ativo esta vazio", (
     { kind: "group", text: "Cessados" },
     { kind: "option", text: "NB 111.222.333-4 / ESP. 31" },
   ]), []);
+});
+
+test("mantem todas as matriculas SIAPE sem filtrar grupos", () => {
+  assert.deepEqual(enrollmentLabels([
+    { kind: "group", text: "Vinculos" },
+    { kind: "option", text: "SIAPE 060632" },
+    { kind: "option", text: "SIAPE 071245" },
+    { kind: "option", text: "SIAPE 060632" },
+    { kind: "group", text: "Historico" },
+    { kind: "option", text: "SIAPE 090001" },
+  ]), ["SIAPE 060632", "SIAPE 071245", "SIAPE 090001"]);
 });
 
 test("apos o PDF atual seleciona somente as proximas matriculas ativas", () => {

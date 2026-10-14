@@ -9,6 +9,21 @@ test("aceita CPF puro e comando INSS", () => {
   assert.deepEqual(parseIncomingText("/inss 52998224725"), { type: "inss", cpf: "52998224725" });
 });
 
+test("identifica consulta SIAPE pelas variacoes do comando", () => {
+  for (const keyword of ["siape", "SIAPE", "Siape", "federal", "FEDERAL"]) {
+    assert.deepEqual(parseIncomingText(`529.982.247-25 ${keyword}`), {
+      type: "siape",
+      cpf: "529.982.247-25",
+    });
+  }
+
+  assert.deepEqual(parseIncomingText("federal CPF: 529 982 247 25"), {
+    type: "siape",
+    cpf: "CPF: 529 982 247 25",
+  });
+  assert.deepEqual(parseIncomingText("/siape 52998224725"), { type: "siape", cpf: "52998224725" });
+});
+
 test("aceita comandos direcionados ao username do bot", () => {
   assert.deepEqual(parseIncomingText("/status@promobank_bot abcd1234"), {
     type: "status",

@@ -47,6 +47,16 @@ export function followingActiveEnrollmentLabels(entries, currentEnrollment) {
   return currentIndex === -1 ? [] : active.slice(currentIndex + 1);
 }
 
+export function enrollmentLabels(entries) {
+  const enrollments = [];
+  for (const entry of entries || []) {
+    if (entry?.kind !== "option") continue;
+    const label = String(entry.text || "").trim();
+    if (label && !enrollments.includes(label)) enrollments.push(label);
+  }
+  return enrollments;
+}
+
 export function uniquePhoneNumbers(values) {
   const phones = [];
   for (const value of values || []) {
@@ -176,13 +186,21 @@ export class PromobankWorker {
   }
 
   async fetchInssPdfs(cpf, protocol, downloadDirectory = this.#config.downloadDirectory) {
+    return this.#fetchBenefitPdfs(cpf, protocol, downloadDirectory, { benefit: "inss" });
+  }
+
+  async fetchSiapePdfs(cpf, protocol, downloadDirectory = this.#config.downloadDirectory) {
+    return this.#fetchBenefitPdfs(cpf, protocol, downloadDirectory, { benefit: "siape" });
+  }
+
+  async #fetchBenefitPdfs(cpf, protocol, downloadDirectory, { benefit }) {
     if (this.#busy) throw new PromobankAutomationError("WORKER_BUSY", "Worker ocupado.");
     this.#busy = true;
 
     try {
       await this.start();
       await this.#ensureAuthenticated();
-      const frame = await this.#openInss();
+      const frame = benefit === "siape" ? await this.#openSiape() : await this.#openInss();
 
       await frame.locator(SELECTORS.cpfInput).fill(cpf);
       await frame.locator(SELECTORS.searchButton).click();
@@ -199,10 +217,13 @@ export class PromobankWorker {
         currentEnrollment,
         0,
         hasOtherEnrollments,
+        benefit,
       )];
 
       if (hasOtherEnrollments) {
-        const followingEnrollments = await this.#followingActiveEnrollments(frame, currentEnrollment);
+        const followingEnrollments = benefit === "siape"
+          ? await this.#followingSiapeEnrollments(frame, currentEnrollment)
+          : await this.#followingActiveEnrollments(frame, currentEnrollment);
         for (let index = 0; index < followingEnrollments.length; index += 1) {
           const enrollment = followingEnrollments[index];
           await this.#selectEnrollment(frame, enrollment);
@@ -213,13 +234,15 @@ export class PromobankWorker {
             enrollment,
             index + 1,
             true,
+            benefit,
           ));
         }
       }
 
-      this.#logger.info("PDFs das matriculas ativas preparados.", {
+      this.#logger.info("PDFs das matriculas preparados.", {
         protocol,
-        activeEnrollments: pdfs.length,
+        benefit,
+        enrollments: pdfs.length,
         otherEnrollmentsField: hasOtherEnrollments,
       });
       return pdfs;
@@ -266,34 +289,21 @@ export class PromobankWorker {
   }
 
   async #hasOtherEnrollments(frame) {
-    const label = frame.locator("label").filter({ hasText: /^\s*Outras matrículas\s*$/ });
+    const label = frame.locator("label").filter({ hasText: /outras\s+matr/i });
     return (await label.count().catch(() => 0)) > 0;
   }
 
   async #currentEnrollment(frame) {
-    const select = frame.locator(SELECTORS.enrollmentSelect).first();
+    const select = await this.#enrollmentSelect(frame);
     await select.waitFor({ state: "visible", timeout: 5_000 });
     const label = select.locator('span.p-select-label[role="combobox"]').first();
     return (await label.getAttribute("aria-label"))?.trim() || (await label.innerText()).trim();
   }
 
   async #followingActiveEnrollments(frame, currentEnrollment) {
-    const select = frame.locator(SELECTORS.enrollmentSelect).first();
-    await select.click();
-    const listbox = frame.locator('[role="listbox"]').filter({ visible: true }).first();
-    await listbox.waitFor({ state: "visible", timeout: 5_000 });
-    const entries = await listbox.evaluate((element) => Array.from(
-      element.querySelectorAll('.p-select-option-group, [data-pc-section="optiongroup"], [role="option"]'),
-    ).map((item) => ({
-      // PrimeVue also assigns role="option" to group headings. Identify
-      // those headings by their component section before checking options.
-      kind: item.matches('.p-select-option-group, [data-pc-section="optiongroup"]') ? "group" : "option",
-      text: item.textContent || "",
-    })));
+    const { entries } = await this.#enrollmentEntries(frame);
     const active = activeEnrollmentLabels(entries);
     const following = followingActiveEnrollmentLabels(entries, currentEnrollment);
-    const selectedLabel = select.locator('span.p-select-label[role="combobox"]').first();
-    await selectedLabel.press("Escape").catch(() => {});
 
     if (!active.includes(currentEnrollment)) {
       throw new PromobankAutomationError(
@@ -306,9 +316,45 @@ export class PromobankWorker {
     return following;
   }
 
+  async #followingSiapeEnrollments(frame, currentEnrollment) {
+    const { entries } = await this.#enrollmentEntries(frame);
+    const enrollments = enrollmentLabels(entries).filter((label) => label !== currentEnrollment);
+    this.#logger.info("Matriculas SIAPE adicionais identificadas.", { count: enrollments.length });
+    return enrollments;
+  }
+
+  async #enrollmentSelect(frame) {
+    const inssSelect = frame.locator(SELECTORS.enrollmentSelect).first();
+    if (await inssSelect.count().catch(() => 0)) return inssSelect;
+
+    const label = frame.locator("label").filter({ hasText: /outras\s+matr/i }).first();
+    const adjacentSelect = label.locator('xpath=following::div[contains(@class, "p-select")][1]');
+    if (await adjacentSelect.count().catch(() => 0)) return adjacentSelect;
+
+    const genericSelect = frame.locator('div.p-select:has(> span.p-select-label[role="combobox"])');
+    if (await genericSelect.count().catch(() => 0) === 1) return genericSelect.first();
+
+    throw new PromobankAutomationError("ENROLLMENT_SELECT_NOT_FOUND", "O seletor de outras matriculas nao foi localizado.");
+  }
+
+  async #enrollmentEntries(frame) {
+    const select = await this.#enrollmentSelect(frame);
+    await select.click();
+    const listbox = frame.locator('[role="listbox"]').filter({ visible: true }).first();
+    await listbox.waitFor({ state: "visible", timeout: 5_000 });
+    const entries = await listbox.evaluate((element) => Array.from(
+      element.querySelectorAll('.p-select-option-group, [data-pc-section="optiongroup"], [role="option"]'),
+    ).map((item) => ({
+      kind: item.matches('.p-select-option-group, [data-pc-section="optiongroup"]') ? "group" : "option",
+      text: item.textContent || "",
+    })));
+    await select.locator('span.p-select-label[role="combobox"]').first().press("Escape").catch(() => {});
+    return { select, entries };
+  }
+
   async #selectEnrollment(frame, enrollment) {
     if (!enrollment) return;
-    const select = frame.locator(SELECTORS.enrollmentSelect).first();
+    const select = await this.#enrollmentSelect(frame);
     const label = select.locator('span.p-select-label[role="combobox"]').first();
     const current = (await label.getAttribute("aria-label"))?.trim() || (await label.innerText()).trim();
     if (current === enrollment) return;
@@ -323,7 +369,7 @@ export class PromobankWorker {
     });
   }
 
-  async #downloadCurrentEnrollmentPdf(frame, protocol, downloadDirectory, enrollment, index, multiple) {
+  async #downloadCurrentEnrollmentPdf(frame, protocol, downloadDirectory, enrollment, index, multiple, benefit = "inss") {
     const printButton = frame.locator('button:has-text("Ver Impressão")');
     let popup;
     try {
@@ -339,7 +385,7 @@ export class PromobankWorker {
         popup,
         protocol,
         downloadDirectory,
-        { enrollment, index, multiple },
+        { enrollment, index, multiple, benefit },
       );
     } catch (error) {
       if (!(error instanceof PromobankAutomationError)) {
@@ -359,10 +405,18 @@ export class PromobankWorker {
   async #isAppReady() { return !!(await this.#page?.locator(SELECTORS.appFrame).count().catch(() => 0)); }
 
   async #openInss() {
+    return this.#openBenefit("INSS");
+  }
+
+  async #openSiape() {
+    return this.#openBenefit("SIAPE");
+  }
+
+  async #openBenefit(benefit) {
     const frame = this.#page.frameLocator(SELECTORS.appFrame);
-    const inssTab = frame.locator('button:has-text("INSS")');
-    await inssTab.waitFor({ state: "visible", timeout: 15_000 });
-    await inssTab.click();
+    const benefitTab = frame.getByRole("button", { name: new RegExp(`^\\s*${benefit}\\s*$`, "i") }).first();
+    await benefitTab.waitFor({ state: "visible", timeout: 15_000 });
+    await benefitTab.click();
     const confirmChange = frame.locator('button:has-text("Sim")');
     const confirmationVisible = await confirmChange
       .waitFor({ state: "visible", timeout: 3_000 })
@@ -370,7 +424,7 @@ export class PromobankWorker {
       .catch(() => false);
     if (confirmationVisible) {
       await confirmChange.click();
-      this.#logger.info("Confirmacao de troca para o convenio INSS aceita.");
+      this.#logger.info("Confirmacao de troca de convenio aceita.", { benefit: benefit.toLowerCase() });
     }
     await frame.locator(SELECTORS.cpfInput).waitFor({ state: "visible", timeout: 15000 });
     return frame;
@@ -393,7 +447,7 @@ export class PromobankWorker {
     return { frame, foneHotCard };
   }
 
-  async #downloadPdfFromPrintPage(printPage, protocol, downloadDirectory, { enrollment, index = 0, multiple = false } = {}) {
+  async #downloadPdfFromPrintPage(printPage, protocol, downloadDirectory, { enrollment, index = 0, multiple = false, benefit = "inss" } = {}) {
     const result = await printPage.evaluate(async ({ url, maxBytes }) => {
       const response = await fetch(url, { credentials: "include" });
       const buffer = await response.arrayBuffer();
@@ -421,8 +475,8 @@ export class PromobankWorker {
     if (bytes.byteLength > this.#config.maxPdfBytes || !isPdfBuffer(bytes)) throw new PromobankAutomationError("INVALID_PDF", "PDF inválido.");
     await fs.mkdir(downloadDirectory, { recursive: true });
     const filename = multiple
-      ? `extrato-inss-${protocol}-${index + 1}.pdf`
-      : `extrato-inss-${protocol}.pdf`;
+      ? `extrato-${benefit}-${protocol}-${index + 1}.pdf`
+      : `extrato-${benefit}-${protocol}.pdf`;
     const filePath = path.join(downloadDirectory, filename);
     await fs.writeFile(filePath, bytes);
     this.#logger.info("PDF original baixado da pagina de impressao.", { protocol, bytes: bytes.byteLength, filePath });
