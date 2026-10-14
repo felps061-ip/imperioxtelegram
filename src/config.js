@@ -29,7 +29,7 @@ export function loadConfig({ env = process.env, cwd = process.cwd() } = {}) {
 
   return {
     whatsapp: {
-      groupName: env.WHATSAPP_GROUP_NAME || "TESTE PROMOBANK",
+      groupName: env.WHATSAPP_GROUP_NAME || "MufasAI 🦁 - Grupo Império",
       sessionDirectory: env.WHATSAPP_SESSION_DIR ? path.resolve(cwd, env.WHATSAPP_SESSION_DIR) : path.join(localDirectory, "baileys-session"),
     },
     promobank: {

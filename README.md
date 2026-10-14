@@ -1,6 +1,6 @@
 # Promobank x WhatsApp
 
-Aplicativo local para receber CPFs no grupo **TESTE PROMOBANK**, consultar o módulo INSS no Promobank e entregar o PDF no WhatsApp privado de quem fez a solicitação.
+Aplicativo local para receber CPFs no grupo **MufasAI 🦁 - Grupo Império**, consultar o módulo INSS no Promobank e entregar o PDF no WhatsApp privado de quem fez a solicitação.
 
 ## Funcionamento
 
@@ -8,7 +8,7 @@ Aplicativo local para receber CPFs no grupo **TESTE PROMOBANK**, consultar o mó
 2. Uma janela dedicada do Chrome é aberta para o Promobank.
 3. A TI resolve qualquer captcha do Cloudflare e faz o login manual nessa janela.
 4. Na primeira execução, conecte o WhatsApp lendo o QR code exibido no terminal.
-5. Um participante envia o CPF no grupo `TESTE PROMOBANK`, sozinho ou acompanhado da palavra `CPF`.
+5. Um participante envia o CPF no grupo `MufasAI 🦁 - Grupo Império`, sozinho ou acompanhado da palavra `CPF`.
 6. O aplicativo completa zeros à esquerda até 11 dígitos, valida o CPF e executa uma consulta por vez.
 7. O aplicativo identifica as matrículas do grupo **Ativo** em “Outras matrículas”.
 8. Um PDF é gerado para cada matrícula ativa e todos são enviados no privado do solicitante.
@@ -20,7 +20,7 @@ Mensagens de outros grupos, conversas privadas e textos que não correspondam ao
 
 - Windows com Google Chrome instalado.
 - Node.js 22 ou superior.
-- O número conectado precisa participar do grupo `TESTE PROMOBANK`.
+- O número conectado precisa participar do grupo `MufasAI 🦁 - Grupo Império`.
 - O computador deve permanecer ligado e com o aplicativo em execução.
 
 ## Instalação
@@ -46,7 +46,7 @@ Ao executar `npm.cmd start`, o terminal exibirá um QR code. No celular que poss
 3. Selecione **Conectar aparelho**.
 4. Leia o QR code do terminal.
 
-Nas próximas execuções, a sessão será reutilizada enquanto o WhatsApp não a desconectar. Antes de aceitar qualquer CPF, o aplicativo consulta os grupos vinculados e exige encontrar exatamente um grupo chamado `TESTE PROMOBANK`.
+Nas próximas execuções, a sessão será reutilizada enquanto o WhatsApp não a desconectar. Antes de aceitar qualquer CPF, o aplicativo consulta os grupos vinculados e exige encontrar exatamente um grupo chamado `MufasAI 🦁 - Grupo Império`.
 
 ## Login diário no Promobank
 

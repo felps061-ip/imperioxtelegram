@@ -7,13 +7,13 @@ test("carrega configuracao do WhatsApp e mantem sessoes fora do projeto", () => 
   const config = loadConfig({
     cwd: "C:\\mvp",
     env: {
-      WHATSAPP_GROUP_NAME: "TESTE PROMOBANK",
+      WHATSAPP_GROUP_NAME: "MufasAI 🦁 - Grupo Império",
       PROMOBANK_BASE_URL: "https://promobank.online/",
       LOCALAPPDATA: "C:\\LocalAppData",
     },
   });
 
-  assert.equal(config.whatsapp.groupName, "TESTE PROMOBANK");
+  assert.equal(config.whatsapp.groupName, "MufasAI 🦁 - Grupo Império");
   assert.equal(config.whatsapp.sessionDirectory, path.join("C:\\LocalAppData", "PromobankWhatsAppBot", "baileys-session"));
   assert.equal(config.promobank.profileDirectory, path.join("C:\\LocalAppData", "PromobankWhatsAppBot", "chrome-profile"));
   assert.equal(config.promobank.downloadDirectory, path.join("C:\\LocalAppData", "PromobankWhatsAppBot", "pdf-cache"));
