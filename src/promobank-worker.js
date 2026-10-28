@@ -440,7 +440,15 @@ export class PromobankWorker {
     const frame = this.#page.frameLocator(SELECTORS.appFrame);
     const benefitTab = frame.getByRole("button", { name: new RegExp(`^\\s*${benefit}\\s*$`, "i") }).first();
     await benefitTab.waitFor({ state: "visible", timeout: 15_000 });
+    // O aviso pode ter ficado aberto de uma troca anterior e bloquear o clique.
+    await this.#confirmBenefitChange(frame, benefit);
     await benefitTab.click();
+    await this.#confirmBenefitChange(frame, benefit);
+    await frame.locator(SELECTORS.cpfInput).waitFor({ state: "visible", timeout: 15_000 });
+    return frame;
+  }
+
+  async #confirmBenefitChange(frame, benefit) {
     const confirmChange = frame.locator('button:has-text("Sim")');
     const confirmationVisible = await confirmChange
       .waitFor({ state: "visible", timeout: 3_000 })
@@ -450,8 +458,6 @@ export class PromobankWorker {
       await confirmChange.click();
       this.#logger.info("Confirmacao de troca de convenio aceita.", { benefit: benefit.toLowerCase() });
     }
-    await frame.locator(SELECTORS.cpfInput).waitFor({ state: "visible", timeout: 15000 });
-    return frame;
   }
 
   async #openContacts() {
